@@ -2,7 +2,9 @@ import "dotenv/config";
 import Fastify, { FastifyInstance } from "fastify";
 import { registerAuthRoutes } from "./auth";
 import { loggerOptions } from "./logger";
+import { registerProductRoutes } from "./products";
 import { prisma } from "./prisma";
+import { registerStoreRoutes } from "./stores";
 
 const app: FastifyInstance = Fastify({ logger: loggerOptions });
 
@@ -11,6 +13,8 @@ app.addHook("onClose", async () => {
 });
 
 registerAuthRoutes(app);
+registerStoreRoutes(app);
+registerProductRoutes(app);
 
 app.get("/", () => {
     return { message: "Bem-vindo à API DA GALERA!" };

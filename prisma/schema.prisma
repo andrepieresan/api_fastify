@@ -13,9 +13,56 @@ model User {
   email               String               @unique
   password            String
   role                String
+  managedStores       Store[]              @relation("StoreManager")
+  sellerStores        StoreSeller[]        @relation("StoreSellerUser")
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   passwordResetTokens PasswordResetToken[]
+}
+
+model Store {
+  id             String        @id @default(uuid())
+  name           String
+  description    String?
+  city           String?
+  commissionRate Float         @default(0)
+  active         Boolean       @default(true)
+  managerId      String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  manager        User          @relation("StoreManager", fields: [managerId], references: [id], onDelete: Cascade)
+  sellers        StoreSeller[]
+  products       Product[]
+
+  @@index([managerId])
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  sku         String?
+  quantity    Int      @default(0)
+  location    String?
+  storeId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([name])
+}
+
+model StoreSeller {
+  id         String   @id @default(uuid())
+  storeId    String
+  sellerId   String
+  assignedAt DateTime @default(now())
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  seller     User     @relation("StoreSellerUser", fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, sellerId])
+  @@index([sellerId])
 }
 
 model PasswordResetToken {

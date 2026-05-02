@@ -11,8 +11,8 @@ const passwordResetSuccessMessage =
 
 declare module "@fastify/jwt" {
     interface FastifyJWT {
-        payload: { sub: string; email: string; role: Role };
-        user: { id: string; email: string; role: Role };
+        payload: { sub: string; id: string; email: string; role: Role };
+        user: { sub: string; id: string; email: string; role: Role };
     }
 }
 
@@ -220,7 +220,12 @@ export function registerAuthRoutes(app: FastifyInstance) {
         }
 
         const token = app.jwt.sign(
-            { sub: user.id, email: user.email, role: user.role as Role },
+            {
+                sub: user.id,
+                id: user.id,
+                email: user.email,
+                role: user.role as Role,
+            },
             { expiresIn: "1h" },
         );
 
