@@ -1,9 +1,13 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fastifyJwt from "@fastify/jwt";
 import * as bcrypt from "bcryptjs";
+import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "./prisma";
 
 type Role = "vendedor" | "gestor" | "master";
+const defaultPasswordResetTokenTtlMinutes = 30;
+const passwordResetSuccessMessage =
+    "Se o e-mail estiver cadastrado, enviaremos instruções para redefinir a senha.";
 
 declare module "@fastify/jwt" {
     interface FastifyJWT {
@@ -47,6 +51,54 @@ const loginSchema = {
         },
     },
 };
+
+const forgotPasswordSchema = {
+    body: {
+        type: "object",
+        required: ["email"],
+        properties: {
+            email: { type: "string", format: "email" },
+        },
+    },
+};
+
+const resetPasswordSchema = {
+    body: {
+        type: "object",
+        required: ["token", "newPassword"],
+        properties: {
+            token: { type: "string", minLength: 64 },
+            newPassword: { type: "string", minLength: 6 },
+        },
+    },
+};
+
+function hashPasswordResetToken(token: string) {
+    return createHash("sha256").update(token).digest("hex");
+}
+
+function normalizeEmail(email: string) {
+    return email.trim().toLowerCase();
+}
+
+function getPasswordResetTokenTtlMinutes() {
+    const passwordResetTokenTtlMinutes = Number(
+        process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
+    );
+
+    if (
+        Number.isFinite(passwordResetTokenTtlMinutes) &&
+        passwordResetTokenTtlMinutes > 0
+    ) {
+        return passwordResetTokenTtlMinutes;
+    }
+
+    return defaultPasswordResetTokenTtlMinutes;
+}
+
+function getPasswordResetExpiresAt() {
+    return new Date(Date.now() + getPasswordResetTokenTtlMinutes() * 60 * 1000);
+}
 
 export function registerAuthRoutes(app: FastifyInstance) {
     app.register(fastifyJwt, {
@@ -101,9 +153,10 @@ export function registerAuthRoutes(app: FastifyInstance) {
                         password: string;
                         role: Role;
                     };
+                    const normalizedEmail = normalizeEmail(email);
 
                     const existingUser = await prisma.user.findUnique({
-                        where: { email },
+                        where: { email: normalizedEmail },
                     });
                     if (existingUser) {
                         return reply
@@ -115,7 +168,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
                     const user = await prisma.user.create({
                         data: {
                             name,
-                            email,
+                            email: normalizedEmail,
                             password: hashedPassword,
                             role,
                         },
@@ -157,7 +210,10 @@ export function registerAuthRoutes(app: FastifyInstance) {
             email: string;
             password: string;
         };
-        const user = await prisma.user.findUnique({ where: { email } });
+        const normalizedEmail = normalizeEmail(email);
+        const user = await prisma.user.findUnique({
+            where: { email: normalizedEmail },
+        });
 
         if (!user || !(await bcrypt.compare(password, user.password))) {
             return reply.status(401).send({ error: "Credenciais inválidas" });
@@ -178,4 +234,90 @@ export function registerAuthRoutes(app: FastifyInstance) {
             },
         });
     });
+
+    app.post(
+        "/forgot-password",
+        { schema: forgotPasswordSchema },
+        async (request) => {
+            const { email } = request.body as { email: string };
+            const normalizedEmail = normalizeEmail(email);
+            const user = await prisma.user.findUnique({
+                where: { email: normalizedEmail },
+            });
+
+            if (!user) {
+                return { message: passwordResetSuccessMessage };
+            }
+
+            const resetToken = randomBytes(32).toString("hex");
+            const expiresAt = getPasswordResetExpiresAt();
+
+            await prisma.$transaction([
+                prisma.passwordResetToken.deleteMany({
+                    where: { userId: user.id },
+                }),
+                prisma.passwordResetToken.create({
+                    data: {
+                        userId: user.id,
+                        tokenHash: hashPasswordResetToken(resetToken),
+                        expiresAt,
+                    },
+                }),
+            ]);
+
+            if (process.env.NODE_ENV === "production") {
+                app.log.info(
+                    { userId: user.id },
+                    "Token de recuperação de senha gerado",
+                );
+
+                return { message: passwordResetSuccessMessage };
+            }
+
+            return {
+                message: passwordResetSuccessMessage,
+                resetToken,
+                expiresAt,
+            };
+        },
+    );
+
+    app.post(
+        "/reset-password",
+        { schema: resetPasswordSchema },
+        async (request, reply) => {
+            const { token, newPassword } = request.body as {
+                token: string;
+                newPassword: string;
+            };
+            const tokenHash = hashPasswordResetToken(token.trim());
+            const passwordResetToken =
+                await prisma.passwordResetToken.findUnique({
+                    where: { tokenHash },
+                });
+
+            if (
+                !passwordResetToken ||
+                passwordResetToken.expiresAt.getTime() < Date.now()
+            ) {
+                return reply
+                    .status(400)
+                    .send({ error: "Token inválido ou expirado" });
+            }
+
+            const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+            await prisma.$transaction([
+                prisma.user.update({
+                    where: { id: passwordResetToken.userId },
+                    data: { password: hashedPassword },
+                }),
+                prisma.passwordResetToken.deleteMany({
+                    where: { userId: passwordResetToken.userId },
+                }),
+            ]);
+
+            return reply.send({ message: "Senha redefinida com sucesso" });
+        },
+    );
 }
