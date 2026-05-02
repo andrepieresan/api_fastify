@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+npm-debug.log
+yarn-error.log
+coverage
+prisma/dev.db
+prisma/dev.db-journal
